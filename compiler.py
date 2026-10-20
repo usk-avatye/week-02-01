@@ -8,6 +8,18 @@ symbol_kinds = {
     ")": "RPAREN",
 }
 
+# AST에서 정수를 담은 노드
+class Number:
+    def __init__(self, value):
+        self.value = value
+
+# AST에서 연산자를 담은 노드
+class BinaryOp:
+    def __init__(self, value, left, right):
+        self.operator = value
+        self.left = left
+        self.right = right
+
 # 현재 위치에서 정수 '하나'를 읽는 함수
 # 입력: (문자열, 숫자가 시작되는 인덱스)
 # 출력: (이번 함수 호출로 읽은 정수, 다음 읽을 위치)
@@ -72,3 +84,85 @@ def tokenizer(source):
     # 5. 입력 끝에 도달하면 EOF 토큰을 추가하고 목록을 반환
     tokens.append(("EOF", None, len_source))
     return tokens
+
+
+# 숫자 하나 또는 괄호로 묶인 표현식 하나를 읽자!
+# position과 n은 문자열이 아니라 토큰 목록의 인덱스다.
+# 출력: (만든 AST, 다음 읽을 토큰 위치)
+def parse_number_or_group(tokens, position):
+    kind, value, source_position = tokens[position]
+
+    if kind == "INTEGER":
+        return (Number(value), position + 1)
+
+    elif kind == "LPAREN":
+        node, n = parse_addition(tokens, position + 1)
+
+        # 괄호 안을 다 읽었으니 닫는 괄호까지 여기서 소비해야 한다.
+        if tokens[n][0] != "RPAREN":
+            source_position = tokens[n][2]
+            raise ValueError(f"위치 {source_position}: ')'가 필요합니다.")
+
+        return (node, n + 1)
+
+    else:
+        raise ValueError(f"위치 {source_position}: 정수 또는 '('가 필요합니다.")
+
+
+# 곱셈이 이어지는 동안 트리를 연결하고, 다른 토큰은 남겨 둔다.
+def parse_multiplication(tokens, position):
+    node, n = parse_number_or_group(tokens, position)
+
+    while tokens[n][0] == "STAR":
+        right, n = parse_number_or_group(tokens, n + 1)
+        node = BinaryOp("*", node, right)
+
+    return (node, n)
+
+
+# 오른쪽 항의 곱셈까지 완성한 뒤 덧셈으로 연결하자!
+def parse_addition(tokens, position):
+    node, n = parse_multiplication(tokens, position)
+
+    while tokens[n][0] == "PLUS":
+        right, n = parse_multiplication(tokens, n + 1)
+        # 지금까지 만든 트리를 왼쪽 자식으로 넣으면 왼쪽 결합이 된다.
+        node = BinaryOp("+", node, right)
+
+    return (node, n)
+
+
+# tokenizer가 만든 토큰 목록을 받아 AST의 루트 노드를 반환한다.
+def parse(tokens):
+    node, n = parse_addition(tokens, 0)
+
+    # 표현식을 읽고도 토큰이 남았다면 문법에 맞지 않는 입력이다.
+    if tokens[n][0] != "EOF":
+        kind, value, source_position = tokens[n]
+        raise ValueError(f"위치 {source_position}: 예상하지 못한 토큰 '{value}'")
+
+    return node
+
+
+# AST를 따라가며 Python 코드 문자열을 만들자!
+def generate_python(node):
+    if isinstance(node, Number):
+        return str(node.value)
+
+    elif isinstance(node, BinaryOp):
+        # 자식도 숫자나 연산 노드이므로 같은 함수로 변환하면 된다.
+        left = generate_python(node.left)
+        right = generate_python(node.right)
+
+        # AST에서 정한 연산 순서가 유지되도록 괄호로 감싼다.
+        return f"({left} {node.operator} {right})"
+
+    else:
+        raise TypeError("지원하지 않는 AST 노드입니다.")
+
+
+# 원본 문자열을 받아 Python 코드 문자열로 바꾸는 전체 흐름
+def compile_source(source):
+    tokens = tokenizer(source)
+    node = parse(tokens)
+    return generate_python(node)
